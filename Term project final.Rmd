@@ -1,0 +1,339 @@
+---
+title: "Risk of diabetes depending on income and living conditions"
+author: "Hanna Asipovich"
+date: "2022-12-20"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+rm(list=ls())
+library(tidyverse)
+library(httr)
+library(dplyr)
+library(AER)
+library(lspline)
+library(fixest)
+library(modelsummary)
+library(ggpubr)
+library(reshape2)
+library(kableExtra)
+library(ggplot2)
+library(haven)
+library(data.table)
+library(huxtable)
+library(pscl)
+library(patchwork)
+library(MASS)
+library(mfx)
+library(fixest)
+library(estimatr)
+install.packages("wbstats")
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Getting datasets from my Github repository
+my_url <- "https://raw.githubusercontent.com/HannaCEU/DA02-final/main/raw_data/"
+df <- read_csv(paste0(my_url, 'diabetes.csv'))
+df1 <- read_csv(paste0(my_url, 'GNI.csv'))
+df2 <- read_csv(paste0(my_url, 'water.csv'))
+df3 <- read_csv(paste0(my_url, 'sanitation.csv'))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#data munging
+# rename columns 
+df <- df %>% rename(diabetes = '2021 [YR2021]')
+df1 <- df1 %>% rename(gni = '2020 [YR2020]')
+df2 <- df2 %>% rename(water = '2020 [YR2020]')
+df3 <- df3 %>% rename(sanitation = '2020 [YR2020]')
+
+#transformation of variables to numeric
+df$diabetes <- as.numeric(df$diabetes)
+df1$gni <- as.numeric(df1$gni) 
+df2$water <- as.numeric(df2$water)
+df3$sanitation <- as.numeric(df3$sanitation)
+
+#drop NAs
+df <- df %>% drop_na()
+df1 <- df1 %>% drop_na()
+df2 <- df2 %>% drop_na()
+df3 <- df3 %>% drop_na()
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#joining the datasets
+df4 <- left_join(df, df1, by = "Country Code")
+df5 <- left_join(df2, df3, by = "Country Code")
+
+df6 <- left_join(df4, df5, by = "Country Code")
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#further data cleaning 
+# remove unnecessary columns
+drops <- c("Series Name.x.x","Series Code.x.x","Series Name.y.x","Series Code.y.x","Country Name.y.x","Series Name.x.y","Series Code.x.y","Country Name.x.y", "Series Name.y.y","Series Code.y.y","Country Name.y.y")
+df6 <- df6[ , !(names(df6) %in% drops)]
+#checking nas, about 20-25% of data is missing for each variable
+sum(is.na(df6$sanitation))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#cleaning environment
+rm(df, df1, df2, df3, df5, df4, drops, my_url)
+#writing out file
+use_case_dir <- "C:/Users/grazh/Documents/CEU/Business analytics MSc/Fall semester/DA02/Final project/"
+data_out <- use_case_dir
+write_csv(df6,paste(data_out,"diabetes_inference.csv",sep=""))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#The above code is for the data manipulation showcase.  
+#However, as an extra with wbstats package I can download data from the World Bank directly and in a tidy format, i.e. wide, without na, with values as numeric. So I decide to use this clean dataset df0 for my analysis.
+#choosing indicators for selection
+my_indicators = c("diabetes" = "SH.STA.DIAB.ZS",
+                  "gni" = "NY.GNP.PCAP.CD",
+                  "sanitation" = "SH.STA.BASS.ZS",
+                  "water" = "SH.H2O.BASW.ZS")
+df0 <- wbstats::wb_data(my_indicators, country = "countries_only", return_wide = TRUE, mrv = 1) 
+
+#my datasets originate from different years, but as agreed I will use each one of them as the most recent year available. Performing filtering of data.
+df0_2021 <- df0 %>% 
+  filter(date == 2021) %>% 
+  dplyr::select(-c(water,sanitation))
+
+df0_2020 <- df0 %>% 
+  filter(date == 2020) %>% 
+  dplyr::select(-c(gni,diabetes))
+#joining two datasets through inner join and deselecting columns
+df0 <- inner_join(df0_2021, df0_2020, by = "iso3c") %>% 
+  filter(!is.na(diabetes) & !is.na(gni) & !is.na(sanitation) & !is.na(water)) %>% 
+  dplyr::select(-c(date.y, date.x, iso2c.x, country.y, iso2c.y))
+#cleaning environment 
+rm(df0_2020, df0_2021, my_indicators)
+```
+
+```{r}
+
+```
+
+# Introduction
+
+According to the [\*\*World Health Organisation](https://www.who.int/news-room/facts-in-pictures/detail/diabetes), about 422 million people around the world have diabetes.
+It is a globally spread condition and the numbers have quadrupled since 1980s.
+In 2016, WHO published the Global report on diabetes, which calls for action to reduce exposure to the known risk factors for type 2 diabetes and to improve access to and quality of care for people with all forms of diabetes.
+This analysis will look at the association of an increased diabetes risk and GNI(gross national income, Atlas method).
+Additionally, it will consider other contributing factors, such as access to drinking water and sanitation.
+
+## Data and its key features
+
+### Source
+
+We use the data obtained from World Bank [\*\*DataBank webpage](https://databank.worldbank.org/home) for the years 2020-2021.
+On this [\*\*Github repository](https://raw.githubusercontent.com/HannaCEU/DA02-final/main/raw_data/), one can find extracted datasets with indicators for % of country population with diabetes, GNI by Atlas method, % of country population with access to basic sanitation, % of country population with access to drinking water.
+
+### Data Cleaning
+
+Upon examination of the datasets, we filter the data to remove NAs.
+We join the dataset by the country code column, remove unnecessary columns - data and country code, year.
+As the most recent data originates from 2020 and 2021, we decide to use these two years without considering those as time series.
+Data for dependent variable (% of population with diabetes) comes from the later year of 2021.
+
+### X, Y and Z Variables
+
+Dependent variable: % of population with diabetes.
+Dummy variables were created for the probability models: higher than average risk for diabetes in population (above 8% population with diabetes) is equal to 1; otherwise is 0.
+Indepedent variable: GNI, Atlas method.
+Also we carried out log transformation to create lngni.
+Control variables: - % of population with access to sanitation;- % of population with access to drinking water.
+
+## Summary statistics
+
+On average almost 8% of global country population has diabetes (only in 5% of countries this figure goes below 2.1% of population).
+Average GNI(gross national income) is USD 14,889.
+87.5% of population has access to drinking water(with 95% having their whole need covered), and 75.08% has access to basic sanitation(with 95% having their whole need covered).
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Summary statistic
+P95 <- function(x){quantile(x,0.95,na.rm=T)}
+P05 <- function(x){quantile(x,0.05,na.rm=T)}
+datasummary( (`% Population with diabetes` = diabetes ) + 
+               (`GNI, Atlas method` = gni) +
+               (`% Population with access to drinking water` = water) +
+               (`% Population with access to basic sanitation` = sanitation)~
+               Mean + Median + SD + Min + Max + P05 + P95 , 
+             data = df0 ,
+             title = 'Descriptive statistics') %>% 
+  kable_styling(latex_options = c("HOLD_position","scale_down"))
+```
+
+## Correlation Matrix
+
+To assess association between dependent, independent and z-variables I produced a correlation matrix (see Appendix Figure 3).
+It shows that in countries with a higher risk of diabetes, there is correlation with our control variables on access to drinking water and access to basic sanitation.
+Based on visual information by Fig.2, which shows correlation between % of population with diabetes and GNI, we can say that the regression line is in a downward direction.
+Hence, in countries with higher GNI, proportion of population with diabetes is lower.
+
+# Hypothesis
+
+Our hypothesis is that higher % of population with diabetes is associated with the income inequalities and worse life conditions (access to sanitation, drinking water).
+
+## Models
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Carrying out data transformation
+#log of gni 
+df0 <- df0 %>%
+  mutate(lngni=log(gni))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#having analysed the datasummary (see in Annex figure on distribution of countries with diabetes), I created a binary variable on higher than average risk for diabetes for the countries where  above 8% of population have it.
+df0$risk_diabetes <- ifelse(df0$diabetes >=8, 1, 0)
+```
+
+### Simple linear regressions
+
+In a simple regression analysis, we used diabetes % in population as a dependent variable.
+Further, we applied log transformation on GNI and used it as the independent variable.
+Model 1 is simple linear regression and for Model 2 we use linear regression with robust standard errors.
+In Model 1 R2 is only 0.008 and is low to take into account.
+According to Model 2 variable on GNI is statistically significant, and it gives some confidence in finding association between the variables.
+However, R2 stays low and, hence, other variables may influence diabetes occurence, so below we will explore other probability models.
+$$Diabetes=\alpha+\beta_1( lngni )$$
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Simple linear regression on log of GNI
+regr1 <- lm(diabetes ~ lngni, data = df0)
+regr2 <- rlm(diabetes ~ lngni, data = df0, se_type = "HC1")
+msummary(list(regr1, regr2),
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|AIC|BIC',
+         stars=c('*' = .05, '**' = .01)
+) %>% kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+### Probability models 
+We will look further into probability of diabetes occurence as regressed on income, access to drinking water and access to basic sanitation.
+Earlier we created a binary variable on higher than average risk of diabetes (if % of population with diabetes is =\> 8% it equals to 1, otherwise to 0).
+We also add to our equation two more z-variables on % of population which has access to drinking water and % of population with access to basic sanitation.
+As the result, we can see in the Table below that our R2 increased significantly to 0.095. We can say that our z-variables contributed to the quality of the analysis.
+
+We also see that higher GNI has negative correlation with the risk of diabetes occurrence, at the same time the table shows that access to basic sanitation and to drinking water have positive correlation, which can be explained by high level of access to those amenities globally (75% and 100% for 95% of population.)
+
+$$Diabetes^P=\alpha+\beta_1( lngni )+\beta_2( water ) +\beta_3( sanitation )$$
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Probability of higher risk for diabetes
+#creating model formula for further manipulation
+model_formula <- formula(risk_diabetes ~ lngni + water + sanitation)
+
+lpm <- lm( risk_diabetes ~ lngni+ sanitation + water , data = df0 , vcov = 'hetreo' )
+summary(lpm, vcov=sandwich)
+df0$pred_lpm <- predict(lpm)
+summary(df0$pred_lpm)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Logit coefficients
+logit <- glm(model_formula, data = df0, family = binomial (link = "logit"))
+
+#Logit marginal differences
+logit_marg <- logitmfx(model_formula, data=df0, atmean=FALSE, robust = T)
+
+# Probit coefficients
+probit <- glm(model_formula, data = df0, family=binomial(link="probit"))
+
+# Probit marginal differences
+probit_marg <- probitmfx(model_formula, data=df0, atmean=FALSE, robust = T)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Summary of all regression models
+cm <- c('(Intercept)' = 'Constant')
+summary1 <- msummary(list("(1) LPM" = lpm, "(2) Logit" = logit, "(3) Logit Marg" = logit_marg, "(4) Probit" = probit, "(5) Probit Marg" = probit_marg),
+                     fmt="%.3f",
+                     gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC',
+                     stars=c('*' = .05, '**' = .01),
+                     coef_rename = cm,
+                     title = "The Probability of diabetes occurence- LPM, Logit (Marg), and Probit (Marg) models"
+)
+
+summary1
+```
+
+### Robustness Check 
+
+To check robustness we ran logit and probit regressions on our LPM model. These models increased the coefficients and they are not exactly the same as our LPM model.
+
+Our results, apart from association with GNI, are statistically insignificant and are not enough to say whether it is likely for a resident of a certain country to develop diabetes.
+Adding z-variables helped with increasing our R2.
+But we understand that it is worth exploring additional variables. Especially, since we know, for example, that 95% of population has their need in drinking water fully covered, we can say that this is not a telling variable for us.
+
+For taking account external validity, we can run similar exercise on the earlier time series by the World Bank, as the research on diabetes is carried out every decade.
+Apart from that, we can confirm by independent national reports with more extended data.
+For example, see for this [\*\*report from Korea](https://bmjopen.bmj.com/content/4/8/e005710), that lower income is associated with a higher prevalence of diabetes.
+
+# Summary and conclusion
+
+We studied the relationship between diabetes, GNI and access to drinking water and basic sanitation in countries.
+We built a multiple linear regression model, where we reach a conclusion that "A higher risk of diabetes occurrence has negative association with GNI level. According to the WHO 2016 report on diabetes, the prevalence of diabetes is growing especially rapidly in low and middle income countries. So it may be necessary to study more indepth what other factors are associated with the diabetes development to make an actionable proposition to the governments in this specific group of countries.
+
+# Appendix
+
+### Figure 1: Distribution of countries by % of population with diabetes
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Distribution of countries by % of population with diabetes
+graph1 <- ggplot(data = df0, aes(x = diabetes)) + 
+  geom_histogram(fill = "blue") + 
+  labs(x='% population with diabetes')+
+  theme_bw()+ 
+  ggtitle("Figure 1 : Countries by % of population with diabetes")
+graph1
+```
+
+### Figure 2: % of population with diabetes and GNI
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+lpmgni <- feols(diabetes ~ gni, data = df0 , vcov = 'hetero')
+df0$predongni <- predict(lpmgni)
+
+g1 <- ggplot(data = df0) +
+  geom_point(aes(x = gni, y = predongni), size = 1, shape = 10) +
+  geom_line(aes(x = gni, y = predongni),  size=1) +
+  labs(x = "GNI",y = "Predicted probability of diabetes")+
+  coord_cartesian(xlim = c(0, 100000), ylim=c(0,10)) +
+  theme_light() + 
+  ggtitle("Figure 2 : % of population with diabetes and GNI")
+print(g1)
+```
+
+### Figure 3: Correlation Matrix
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Correlation matrix
+numeric_df <- keep( df0 , is.numeric )
+get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  
+cormat <- round(cor(numeric_df),2)
+upper_tri <- get_upper_tri(cormat)
+melted_cormat <- melt(upper_tri, na.rm = TRUE)
+
+cormat<- ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1))+
+  coord_fixed()+
+  ggtitle("Correlation Matrix")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cormat
+```
